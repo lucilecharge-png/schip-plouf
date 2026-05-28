@@ -73,6 +73,8 @@ const PHASES = [
 
 const ALL_STEPS = PHASES.flatMap(p => p.steps.map(s => s.id));
 
+const frDate = ts => new Date(ts).toLocaleDateString('fr-FR', { day:'numeric', month:'long', year:'numeric' });
+
 function JoyLogo({ size=160 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
@@ -170,13 +172,20 @@ function App() {
       return saved || [{role:"coach", text:"Salut ! Je suis le coach de Joy 🐾 Une Schipperke de 8 ans pleine de caractère, et notre mission c'est qu'elle entre dans la mer à Gigaro le 18 juillet. Coche ses étapes à mesure qu'elle progresse, et pose-moi toutes tes questions !"}];
     } catch { return [{role:"coach", text:"Salut ! Je suis le coach de Joy 🐾"}]; }
   });
+  const [notes, setNotes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("schip_notes") || "{}"); } catch { return {}; }
+  });
+  const [noteOpen, setNoteOpen] = useState(null);
+  const [noteDraft, setNoteDraft] = useState("");
   const [input, setInput] = useState("");
   const [now, setNow] = useState(new Date());
   const chatRef = useRef(null);
+  const fileRef = useRef(null);
 
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 60000); return () => clearInterval(t); }, []);
   useEffect(() => { localStorage.setItem("schip_checked", JSON.stringify(checked)); }, [checked]);
   useEffect(() => { localStorage.setItem("schip_messages", JSON.stringify(messages)); }, [messages]);
+  useEffect(() => { localStorage.setItem("schip_notes", JSON.stringify(notes)); }, [notes]);
   useEffect(() => { if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight; }, [messages]);
 
   const doneCount = ALL_STEPS.filter(id => checked[id]).length;
@@ -200,6 +209,18 @@ function App() {
 
   const toggle = id => setChecked(c => { const n = {...c, [id]: !c[id]}; return n; });
 
+  const addNote = stepId => {
+    const text = noteDraft.trim();
+    if (!text) return;
+    const note = { id: Date.now() + "-" + Math.random().toString(36).slice(2,7), ts: Date.now(), text };
+    setNotes(n => ({ ...n, [stepId]: [...(n[stepId] || []), note] }));
+    setNoteDraft("");
+    setNoteOpen(null);
+  };
+
+  const removeNote = (stepId, noteId) =>
+    setNotes(n => ({ ...n, [stepId]: (n[stepId] || []).filter(x => x.id !== noteId) }));
+
   const resetAll = () => {
     if (window.confirm("Réinitialiser toute la progression de Joy ?")) {
       setChecked({});
@@ -211,6 +232,61 @@ function App() {
     const init = [{role:"coach", text:"Salut ! Je suis le coach de Joy 🐾 Pose-moi tes questions, je m'adapte à sa progression."}];
     setMessages(init);
     localStorage.setItem("schip_messages", JSON.stringify(init));
+  };
+
+  const download = (filename, text, type) => {
+    const blob = new Blob([text], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const stamp = () => new Date().toISOString().slice(0, 10);
+
+  const exportCarnet = () => {
+    const L = [];
+    L.push("🐾 Carnet de Joy — export du " + frDate(Date.now()));
+    L.push("Progression : " + doneCount + "/" + totalCount + " étapes (" + globalPct + "%)");
+    L.push("Objectif : la mer à Gigaro le 18 juillet 2026");
+    L.push("");
+    PHASES.forEach(phase => {
+      L.push("Phase " + phase.id + " — " + phase.title + "  (" + phase.duration + ")");
+      phase.steps.forEach(s => {
+        L.push("  " + (checked[s.id] ? "✓" : "☐") + " " + s.label);
+        (notes[s.id] || []).forEach(n => L.push("      • " + frDate(n.ts) + " · " + n.text));
+      });
+      L.push("");
+    });
+    L.push("☀️ Patience, douceur et friandises — Joy y arrivera 💙");
+    download("carnet-joy-" + stamp() + ".txt", L.join("\n"), "text/plain;charset=utf-8");
+  };
+
+  const exportBackup = () => {
+    const data = JSON.stringify({ app:"schip-plouf", version:1, exportedAt:Date.now(), checked, notes, messages }, null, 2);
+    download("sauvegarde-joy-" + stamp() + ".json", data, "application/json");
+  };
+
+  const importBackup = e => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (data.app !== "schip-plouf") throw new Error("format");
+        if (!window.confirm("Importer cette sauvegarde ? Tes notes et cases actuelles seront remplacées.")) { e.target.value = ""; return; }
+        if (data.checked) setChecked(data.checked);
+        if (data.notes) setNotes(data.notes);
+        if (data.messages) setMessages(data.messages);
+        window.alert("Sauvegarde importée 🎉 La progression de Joy est restaurée.");
+      } catch {
+        window.alert("Fichier illisible. Choisis bien un fichier .json exporté depuis cette app (bouton « Sauvegarder »).");
+      }
+      e.target.value = "";
+    };
+    reader.readAsText(file);
   };
 
   const send = preset => {
@@ -226,6 +302,8 @@ function App() {
     : ["Quelle est la prochaine étape ?",
        ["Comment l'habituer à la baignoire ?","Comment gérer le bassin ?","Comment régler le gilet ?","Comment l'acclimater au sel ?"][Math.min(phaseIdx,3)],
        "Joy hésite à entrer dans l'eau"];
+
+  const actBtn = {display:"flex", alignItems:"center", gap:5, background:"none", border:"1.5px solid #cdd9de", color:"#5b7884", borderRadius:999, padding:"5px 12px", fontWeight:700, fontSize:12.5, cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap"};
 
   return (
     <div style={{fontFamily:"'Nunito',system-ui,sans-serif", background:`linear-gradient(180deg,${C.foam} 0%,#eef9fc 38%,#fff 100%)`, minHeight:"100vh", color:C.oceanDark, paddingBottom:48}}>
@@ -268,11 +346,15 @@ function App() {
         </section>
 
         {/* Phases header */}
-        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", margin:"8px 4px 12px"}}>
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, margin:"8px 4px 12px"}}>
           <h2 className="baloo" style={{margin:0, fontSize:20, color:C.ocean}}>🌊 Les 4 phases</h2>
-          <button onClick={resetAll} style={{display:"flex", alignItems:"center", gap:5, background:"none", border:"1.5px solid #cdd9de", color:"#5b7884", borderRadius:999, padding:"5px 12px", fontWeight:700, fontSize:12.5, cursor:"pointer", fontFamily:"inherit"}}>
-            ↺ Réinitialiser
-          </button>
+          <div style={{display:"flex", gap:7, flexWrap:"wrap"}}>
+            <button onClick={exportCarnet} title="Télécharger un carnet lisible (.txt)" style={actBtn}>📄 Carnet</button>
+            <button onClick={exportBackup} title="Télécharger une sauvegarde re-importable (.json)" style={actBtn}>💾 Sauvegarder</button>
+            <button onClick={() => fileRef.current && fileRef.current.click()} title="Restaurer depuis une sauvegarde .json" style={actBtn}>📂 Importer</button>
+            <button onClick={resetAll} style={actBtn}>↺ Réinitialiser</button>
+            <input ref={fileRef} type="file" accept="application/json,.json" onChange={importBackup} style={{display:"none"}}/>
+          </div>
         </div>
 
         {/* Phases */}
@@ -309,14 +391,44 @@ function App() {
               <div style={{marginTop:6}}>
                 {phase.steps.map(s => {
                   const on = !!checked[s.id];
+                  const stepNotes = notes[s.id] || [];
+                  const open = noteOpen === s.id;
                   return (
-                    <div key={s.id} className="stepRow" onClick={() => toggle(s.id)} style={{display:"flex", alignItems:"flex-start", gap:11, padding:"9px 8px", borderRadius:12, cursor:"pointer", transition:"background .15s"}}>
-                      <div style={{flexShrink:0, width:24, height:24, borderRadius:8, marginTop:1, border:on?"none":"2px solid #c5d4da", background:on?C.coral:"#fff", display:"flex", alignItems:"center", justifyContent:"center", transition:"all .15s", color:"#fff", fontWeight:800, fontSize:15}}>
-                        {on && "✓"}
+                    <div key={s.id} style={{borderRadius:12, marginBottom:2}}>
+                      <div className="stepRow" onClick={() => toggle(s.id)} style={{display:"flex", alignItems:"flex-start", gap:11, padding:"9px 8px", borderRadius:12, cursor:"pointer", transition:"background .15s"}}>
+                        <div style={{flexShrink:0, width:24, height:24, borderRadius:8, marginTop:1, border:on?"none":"2px solid #c5d4da", background:on?C.coral:"#fff", display:"flex", alignItems:"center", justifyContent:"center", transition:"all .15s", color:"#fff", fontWeight:800, fontSize:15}}>
+                          {on && "✓"}
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{display:"flex", alignItems:"center", gap:7, flexWrap:"wrap"}}>
+                            <span style={{fontWeight:800, fontSize:14.5, color:on?"#9bb2bb":C.oceanDark, textDecoration:on?"line-through":"none"}}>{s.label}</span>
+                            {stepNotes.length > 0 && <span style={{background:C.foam, color:C.ocean, fontSize:11, fontWeight:800, padding:"1px 8px", borderRadius:999}}>💬 {stepNotes.length}</span>}
+                          </div>
+                          <div style={{fontSize:12.5, color:"#8aa6b0", fontWeight:600}}>{s.hint}</div>
+                        </div>
                       </div>
-                      <div style={{flex:1}}>
-                        <div style={{fontWeight:800, fontSize:14.5, color:on?"#9bb2bb":C.oceanDark, textDecoration:on?"line-through":"none"}}>{s.label}</div>
-                        <div style={{fontSize:12.5, color:"#8aa6b0", fontWeight:600}}>{s.hint}</div>
+
+                      {/* Notes datées de l'étape */}
+                      <div style={{marginLeft:35, marginRight:8, marginBottom:6}}>
+                        {stepNotes.map(note => (
+                          <div key={note.id} style={{display:"flex", alignItems:"flex-start", gap:8, background:"#f6fbfc", border:"1.5px solid #e7eef1", borderRadius:10, padding:"7px 10px", marginTop:5}}>
+                            <span style={{flexShrink:0, fontSize:11, fontWeight:800, color:C.ocean, whiteSpace:"nowrap", marginTop:1}}>{frDate(note.ts)}</span>
+                            <span style={{flex:1, fontSize:13, fontWeight:600, color:C.oceanDark, lineHeight:1.45}}>{note.text}</span>
+                            <button onClick={() => removeNote(s.id, note.id)} title="Supprimer cette note" style={{flexShrink:0, background:"none", border:"none", color:"#b9c9cf", cursor:"pointer", fontSize:14, fontWeight:800, lineHeight:1, padding:"0 2px"}}>✕</button>
+                          </div>
+                        ))}
+
+                        {open ? (
+                          <div style={{display:"flex", gap:6, marginTop:6}}>
+                            <input autoFocus value={noteDraft} onChange={e => setNoteDraft(e.target.value)} onKeyDown={e => { if(e.key==="Enter") addNote(s.id); if(e.key==="Escape"){ setNoteOpen(null); setNoteDraft(""); } }} placeholder="Ta note du jour…" style={{flex:1, border:"2px solid #e2ecef", borderRadius:10, padding:"8px 11px", fontSize:13, fontWeight:600, outline:"none", color:C.oceanDark, fontFamily:"inherit"}}/>
+                            <button onClick={() => addNote(s.id)} style={{background:C.coral, border:"none", borderRadius:10, color:"#fff", fontWeight:800, fontSize:13, padding:"0 14px", cursor:"pointer", fontFamily:"inherit"}}>OK</button>
+                            <button onClick={() => { setNoteOpen(null); setNoteDraft(""); }} title="Annuler" style={{background:"#eef4f6", border:"none", borderRadius:10, color:"#5b7884", fontWeight:800, fontSize:13, padding:"0 12px", cursor:"pointer", fontFamily:"inherit"}}>✕</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => { setNoteOpen(s.id); setNoteDraft(""); }} style={{marginTop:6, background:"none", border:"1.5px dashed #c5d4da", color:"#5b7884", borderRadius:999, padding:"4px 12px", fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit"}}>
+                            + Ajouter une note
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
